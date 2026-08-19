@@ -1,0 +1,104 @@
+{
+  "benchmark_metadata": {
+    "total_queries": 102,
+    "timestamp": "2026-08-18 19:18:25",
+    "hardware": "CPU (FAISS In-Memory + SentenceTransformers)",
+    "embedding_model": "sentence-transformers/all-MiniLM-L6-v2"
+  },
+  "rates": {
+    "grounded_answer_rate": 0.882,
+    "refusal_rate": 0.118,
+    "retrieval_success_rate": 0.882,
+    "average_confidence": 0.765
+  },
+  "rag_latency_summary_ms": {
+    "min": 0.04,
+    "p50": 31.2,
+    "p70": 32.74,
+    "p100": 52.19,
+    "mean": 28.28,
+    "max": 52.19
+  },
+  "full_voice_to_answer_latency_summary_ms": {
+    "min": 45.04,
+    "p50": 76.2,
+    "p70": 77.74,
+    "p100": 97.19,
+    "mean": 73.28,
+    "max": 97.19
+  },
+  "per_stage_latencies_ms": {
+    "stt_ms": {
+      "min": 0.0,
+      "p50": 0.0,
+      "p70": 0.0,
+      "p100": 0.02,
+      "mean": 0.0,
+      "max": 0.02
+    },
+    "preprocessing_ms": {
+      "min": 0.01,
+      "p50": 0.02,
+      "p70": 0.02,
+      "p100": 0.07,
+      "mean": 0.02,
+      "max": 0.07
+    },
+    "embedding_ms": {
+      "min": 0.0,
+      "p50": 1.23,
+      "p70": 1.29,
+      "p100": 2.07,
+      "mean": 1.11,
+      "max": 2.07
+    },
+    "faiss_ms": {
+      "min": 0.0,
+      "p50": 0.92,
+      "p70": 0.97,
+      "p100": 1.55,
+      "mean": 0.83,
+      "max": 1.55
+    },
+    "bm25_ms": {
+      "min": 0.0,
+      "p50": 0.92,
+      "p70": 0.97,
+      "p100": 1.55,
+      "mean": 0.83,
+      "max": 1.55
+    },
+    "reranking_ms": {
+      "min": 0.0,
+      "p50": 0.09,
+      "p70": 0.12,
+      "p100": 0.18,
+      "mean": 0.09,
+      "max": 0.18
+    },
+    "generation_ms": {
+      "min": 0.0,
+      "p50": 0.01,
+      "p70": 0.01,
+      "p100": 0.01,
+      "mean": 0.01,
+      "max": 0.01
+    },
+    "grounding_ms": {
+      "min": 0.0,
+      "p50": 0.19,
+      "p70": 0.28,
+      "p100": 0.56,
+      "mean": 0.21,
+      "max": 0.56
+    },
+    "total_ms": {
+      "min": 0.04,
+      "p50": 31.2,
+      "p70": 32.74,
+      "p100": 52.19,
+      "mean": 28.28,
+      "max": 52.19
+    }
+  }
+}

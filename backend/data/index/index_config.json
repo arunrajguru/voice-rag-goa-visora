@@ -1,0 +1,12 @@
+{
+  "dataset": "ai4bharat/MSMARCO-XI",
+  "total_documents": 500,
+  "total_chunks": 10,
+  "strategies": [
+    "fixed",
+    "sentence",
+    "semantic"
+  ],
+  "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
+  "built_at": "2026-08-18 19:14:36"
+}

@@ -1,0 +1,37 @@
+# Secrets & Environment Variables
+.env
+.env.local
+*.pem
+*.key
+
+# Python Virtual Environments & Caches
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+.pytest_cache/
+.coverage
+
+# Generated Indexes & Large Data
+backend/data/index/*.index
+backend/data/index/*.pkl
+backend/data/index/metadata.json
+
+# Benchmark Output Artifacts (if large)
+evaluation/results/results.json
+evaluation/results/latency_results.csv
+
+# Node & Frontend Build
+frontend/node_modules/
+frontend/dist/
+frontend/build/
+.npm
+*.log
+
+# OS / IDE Junk
+.DS_Store
+.vscode/
+.idea/
+*.swp
