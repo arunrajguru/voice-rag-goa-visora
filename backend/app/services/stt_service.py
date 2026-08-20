@@ -1,10 +1,16 @@
 import httpx
+
 from app.config import settings
 from app.utils.logger import logger
 
 
 class SarvamSTTService:
-    """Speech-to-Text service using Sarvam AI."""
+    """
+    Speech-to-Text service using Sarvam AI REST API.
+
+    The service preserves the actual uploaded audio format
+    instead of pretending every recording is WAV.
+    """
 
     def __init__(self, api_key: str = None):
         self.api_key = api_key or settings.SARVAM_API_KEY
@@ -13,38 +19,95 @@ class SarvamSTTService:
     async def transcribe_audio(
         self,
         audio_bytes: bytes,
-        filename: str = "audio.wav",
-        language_code: str = "en-IN"
+        filename: str = "recording.webm",
+        language_code: str = "unknown"
     ) -> str:
 
-        # Never return a fake/hardcoded question.
+        # --------------------------------------------------
+        # Validate API key
+        # --------------------------------------------------
+
         if not self.api_key:
-            logger.error("SARVAM_API_KEY is missing.")
-            raise RuntimeError("SARVAM_API_KEY is not configured.")
+            logger.error(
+                "SARVAM_API_KEY is missing from environment."
+            )
+
+            raise RuntimeError(
+                "SARVAM_API_KEY is not configured on the backend."
+            )
+
+        # --------------------------------------------------
+        # Validate audio
+        # --------------------------------------------------
 
         if not audio_bytes:
-            logger.error("Received empty audio.")
-            raise ValueError("No audio data received.")
+            logger.error(
+                "Received empty audio bytes."
+            )
+
+            raise ValueError(
+                "No audio data received."
+            )
+
+        # --------------------------------------------------
+        # Determine MIME type
+        # --------------------------------------------------
+
+        filename = filename or "recording.webm"
+
+        filename_lower = filename.lower()
+
+        if filename_lower.endswith(".webm"):
+            mime_type = "audio/webm"
+
+        elif filename_lower.endswith(".ogg"):
+            mime_type = "audio/ogg"
+
+        elif filename_lower.endswith(".opus"):
+            mime_type = "audio/opus"
+
+        elif filename_lower.endswith(".mp3"):
+            mime_type = "audio/mpeg"
+
+        elif (
+            filename_lower.endswith(".m4a")
+            or filename_lower.endswith(".mp4")
+        ):
+            mime_type = "audio/mp4"
+
+        elif filename_lower.endswith(".wav"):
+            mime_type = "audio/wav"
+
+        elif filename_lower.endswith(".flac"):
+            mime_type = "audio/flac"
+
+        elif filename_lower.endswith(".aac"):
+            mime_type = "audio/aac"
+
+        else:
+            # Browser recordings from MediaRecorder are
+            # normally WebM/Opus.
+            mime_type = "audio/webm"
+
+        logger.info(
+            f"Preparing Sarvam STT request: "
+            f"filename={filename}, "
+            f"mime_type={mime_type}, "
+            f"size={len(audio_bytes)} bytes, "
+            f"language={language_code}"
+        )
+
+        # --------------------------------------------------
+        # Headers
+        # --------------------------------------------------
 
         headers = {
             "api-subscription-key": self.api_key
         }
 
-        # Detect MIME type from filename
-        filename_lower = filename.lower()
-
-        if filename_lower.endswith(".webm"):
-            mime_type = "audio/webm"
-        elif filename_lower.endswith(".mp3"):
-            mime_type = "audio/mpeg"
-        elif filename_lower.endswith(".m4a"):
-            mime_type = "audio/mp4"
-        elif filename_lower.endswith(".ogg"):
-            mime_type = "audio/ogg"
-        elif filename_lower.endswith(".wav"):
-            mime_type = "audio/wav"
-        else:
-            mime_type = "audio/webm"
+        # --------------------------------------------------
+        # Multipart audio file
+        # --------------------------------------------------
 
         files = {
             "file": (
@@ -54,13 +117,25 @@ class SarvamSTTService:
             )
         }
 
+        # --------------------------------------------------
+        # Sarvam STT parameters
+        # --------------------------------------------------
+
         data = {
-            "model": "saaras:v1",
-            "language_code": language_code
+            "model": "saaras:v3",
+            "language_code": language_code,
+            "mode": "transcribe"
         }
 
+        # --------------------------------------------------
+        # Call Sarvam
+        # --------------------------------------------------
+
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
+
+            async with httpx.AsyncClient(
+                timeout=30.0
+            ) as client:
 
                 response = await client.post(
                     self.api_url,
@@ -69,60 +144,140 @@ class SarvamSTTService:
                     data=data
                 )
 
-                logger.info(
-                    f"Sarvam STT response status: {response.status_code}"
+            logger.info(
+                f"Sarvam STT HTTP status: "
+                f"{response.status_code}"
+            )
+
+            # --------------------------------------------------
+            # Error response
+            # --------------------------------------------------
+
+            if response.status_code != 200:
+
+                logger.error(
+                    "Sarvam STT API error: "
+                    f"status={response.status_code}, "
+                    f"response={response.text}"
                 )
 
-                if response.status_code != 200:
-                    logger.error(
-                        f"Sarvam STT API error: "
-                        f"{response.status_code} - {response.text}"
-                    )
+                # IMPORTANT:
+                # Never return a fake question here.
+                raise RuntimeError(
+                    "Sarvam Speech-to-Text failed "
+                    f"with status {response.status_code}: "
+                    f"{response.text}"
+                )
 
-                    raise RuntimeError(
-                        f"Sarvam STT failed: {response.status_code}"
-                    )
+            # --------------------------------------------------
+            # Parse response
+            # --------------------------------------------------
 
+            try:
                 result = response.json()
 
-                logger.info(f"Sarvam STT response: {result}")
+            except Exception as json_error:
 
-                transcript = (
-                    result.get("transcript")
-                    or result.get("text")
-                    or ""
-                ).strip()
-
-                if not transcript:
-                    logger.error(
-                        "Sarvam returned an empty transcript."
-                    )
-                    raise RuntimeError(
-                        "Speech could not be transcribed."
-                    )
-
-                logger.info(
-                    f"Transcription successful: {transcript}"
+                logger.error(
+                    f"Could not parse Sarvam response: "
+                    f"{json_error}"
                 )
 
-                return transcript
+                raise RuntimeError(
+                    "Invalid response received from Sarvam STT."
+                )
 
-        except httpx.TimeoutException:
-            logger.error("Sarvam STT request timed out.")
-            raise RuntimeError(
-                "Speech recognition timed out. Please try again."
+            logger.info(
+                f"Sarvam STT response: {result}"
             )
 
-        except httpx.RequestError as e:
+            # --------------------------------------------------
+            # Extract transcript
+            # --------------------------------------------------
+
+            transcript = (
+                result.get("transcript")
+                or result.get("text")
+                or ""
+            )
+
+            transcript = transcript.strip()
+
+            # --------------------------------------------------
+            # Empty transcript
+            # --------------------------------------------------
+
+            if not transcript:
+
+                logger.error(
+                    "Sarvam returned an empty transcript."
+                )
+
+                raise RuntimeError(
+                    "Sarvam could not detect speech in the audio."
+                )
+
+            # --------------------------------------------------
+            # Success
+            # --------------------------------------------------
+
+            logger.info(
+                f"Sarvam transcription successful: "
+                f"{transcript}"
+            )
+
+            return transcript
+
+        # ------------------------------------------------------
+        # Timeout
+        # ------------------------------------------------------
+
+        except httpx.TimeoutException as error:
+
             logger.error(
-                f"Sarvam STT network error: {str(e)}"
-            )
-            raise RuntimeError(
-                "Could not connect to speech recognition service."
+                f"Sarvam STT request timed out: {error}"
             )
 
-        except Exception as e:
-            logger.error(
-                f"Sarvam STT failed: {str(e)}"
+            raise RuntimeError(
+                "Speech recognition timed out. "
+                "Please try again."
             )
+
+        # ------------------------------------------------------
+        # Network error
+        # ------------------------------------------------------
+
+        except httpx.RequestError as error:
+
+            logger.error(
+                f"Sarvam STT network error: {error}"
+            )
+
+            raise RuntimeError(
+                "Could not connect to Sarvam "
+                "Speech-to-Text service."
+            )
+
+        # ------------------------------------------------------
+        # Re-raise our own errors
+        # ------------------------------------------------------
+
+        except RuntimeError:
             raise
+
+        except ValueError:
+            raise
+
+        # ------------------------------------------------------
+        # Unexpected error
+        # ------------------------------------------------------
+
+        except Exception as error:
+
+            logger.exception(
+                f"Unexpected Sarvam STT error: {error}"
+            )
+
+            raise RuntimeError(
+                f"Speech recognition failed: {error}"
+            )
