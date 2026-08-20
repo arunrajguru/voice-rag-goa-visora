@@ -1,4 +1,4 @@
-const API_BASE = '';
+const API_BASE = 'https://voice-rag-goa-visora.onrender.com';
 
 export async function fetchHealth() {
   const resp = await fetch(`${API_BASE}/health`);
