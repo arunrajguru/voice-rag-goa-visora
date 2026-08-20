@@ -23,8 +23,8 @@ def build_sample_fallback_index(
     bm25_retriever: BM25Retriever,
 ):
     """
-    Creates a tiny fallback knowledge base when the real index
-    files are unavailable.
+    Creates a lightweight fallback knowledge base when
+    the real index files are unavailable.
     """
 
     logger.info(
@@ -89,7 +89,7 @@ async def lifespan(app: FastAPI):
     )
 
     # ---------------------------------------------------------
-    # Lightweight Dense Retriever
+    # Dense Retriever
     # ---------------------------------------------------------
 
     dense_retriever = DenseRetriever(
@@ -103,11 +103,7 @@ async def lifespan(app: FastAPI):
     bm25_retriever = BM25Retriever()
 
     # ---------------------------------------------------------
-    # Try loading existing metadata + BM25 index.
-    #
-    # We intentionally DO NOT load the old FAISS index.
-    # The lightweight DenseRetriever rebuilds its own index
-    # from the metadata text.
+    # Try loading existing indexes
     # ---------------------------------------------------------
 
     indexes_loaded = False
@@ -174,12 +170,7 @@ async def lifespan(app: FastAPI):
         )
 
     # ---------------------------------------------------------
-    # IMPORTANT:
-    # Do NOT warm up SentenceTransformer here.
-    #
-    # The previous implementation loaded a large ML model
-    # and performed an embedding warmup.
-    # That is removed for Render's 512 MB environment.
+    # Hybrid Retriever
     # ---------------------------------------------------------
 
     hybrid_retriever = HybridRetriever(
@@ -187,6 +178,10 @@ async def lifespan(app: FastAPI):
         bm25_retriever,
         alpha=settings.DENSE_WEIGHT,
     )
+
+    # ---------------------------------------------------------
+    # Pipeline Harness
+    # ---------------------------------------------------------
 
     app.state.pipeline_harness = PipelineHarness(
         hybrid_retriever
@@ -203,6 +198,10 @@ async def lifespan(app: FastAPI):
     )
 
 
+# =========================================================
+# FASTAPI APPLICATION
+# =========================================================
+
 app = FastAPI(
     title=settings.APP_NAME,
     version=settings.VERSION,
@@ -210,17 +209,56 @@ app = FastAPI(
 )
 
 
+# =========================================================
+# CORS
+# =========================================================
+#
+# Frontend:
+# https://voice-rag-goa-visora.vercel.app
+#
+# Previous Vercel deployment:
+# https://voice-rag-goa-visora-gozuvv1pk-visora4.vercel.app
+#
+# We explicitly allow both origins.
+# =========================================================
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+
+    allow_origins=[
+        "https://voice-rag-goa-visora.vercel.app",
+        "https://voice-rag-goa-visora-gozuvv1pk-visora4.vercel.app",
+    ],
+
+    # We are not using cookies/authentication
+    # between the Vercel frontend and Render backend.
+    allow_credentials=False,
+
+    allow_methods=[
+        "GET",
+        "POST",
+        "PUT",
+        "DELETE",
+        "OPTIONS",
+        "PATCH",
+    ],
+
+    allow_headers=[
+        "*"
+    ],
 )
 
 
+# =========================================================
+# API ROUTES
+# =========================================================
+
 app.include_router(router)
 
+
+# =========================================================
+# LOCAL / RENDER STARTUP
+# =========================================================
 
 if __name__ == "__main__":
 
@@ -229,7 +267,11 @@ if __name__ == "__main__":
     port = int(
         os.environ.get(
             "PORT",
-            getattr(settings, "PORT", 10000),
+            getattr(
+                settings,
+                "PORT",
+                10000
+            ),
         )
     )
 
