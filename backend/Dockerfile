@@ -15,14 +15,8 @@ COPY . .
 
 RUN mkdir -p /app/data/index
 
-# Build MSMARCO-XI index during Docker image build
-RUN python scripts/build_index.py --split train --sample 1000
-
-# Verify index files exist
-RUN ls -lh /app/data/index/
-
-ENV PYTHONPATH=/app
+ENV PYTHONPATH=/app/backend
 
 EXPOSE 8000
 
-CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
