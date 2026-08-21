@@ -1,13 +1,7 @@
 import uuid
 import time
 
-from typing import (
-    Dict,
-    Any,
-    List,
-    Optional,
-    Tuple
-)
+from typing import List, Optional, Tuple
 
 from app.models.data_models import (
     VoiceRAGResponse,
@@ -23,88 +17,73 @@ from app.chunking.adaptive import AdaptiveChunkSelector
 from app.retrieval.hybrid import HybridRetriever
 from app.retrieval.reranker import Reranker
 
-from app.guardrails.input_safety import (
-    InputSafetyGuardrail
-)
+from app.guardrails.input_safety import InputSafetyGuardrail
+from app.guardrails.off_topic import OffTopicGuardrail
+from app.guardrails.retrieval_confidence import RetrievalConfidenceGuardrail
+from app.guardrails.grounding import GroundingGuardrail
+from app.guardrails.output_validation import OutputValidationGuardrail
 
-from app.guardrails.off_topic import (
-    OffTopicGuardrail
-)
-
-from app.guardrails.retrieval_confidence import (
-    RetrievalConfidenceGuardrail
-)
-
-from app.guardrails.grounding import (
-    GroundingGuardrail
-)
-
-from app.guardrails.output_validation import (
-    OutputValidationGuardrail
-)
-
-from app.services.stt_service import (
-    SarvamSTTService
-)
-
-from app.services.llm_service import (
-    get_llm_provider
-)
+from app.services.stt_service import SarvamSTTService
+from app.services.llm_service import get_llm_provider
 
 
 class PipelineHarness:
     """
-    Orchestration harness implementing the complete
-    Voice RAG pipeline.
+    Complete Voice RAG pipeline.
+
+    Flow:
+        Audio/Text
+          ↓
+        STT
+          ↓
+        Cleaning
+          ↓
+        Safety Guard
+          ↓
+        Off-topic Guard
+          ↓
+        Query Classification
+          ↓
+        Hybrid Retrieval
+          ↓
+        Reranking
+          ↓
+        Confidence Check
+          ↓
+        LLM
+          ↓
+        Grounding Check
+          ↓
+        Output Validation
+          ↓
+        Final Answer
     """
 
     def __init__(
         self,
         hybrid_retriever: HybridRetriever
     ):
-
         self.stt_service = SarvamSTTService()
 
-        self.adaptive_selector = (
-            AdaptiveChunkSelector()
-        )
+        self.adaptive_selector = AdaptiveChunkSelector()
 
-        self.hybrid_retriever = (
-            hybrid_retriever
-        )
+        self.hybrid_retriever = hybrid_retriever
 
         self.reranker = Reranker()
 
-        # --------------------------------------------------
         # Guardrails
-        # --------------------------------------------------
+        self.safety_guard = InputSafetyGuardrail()
+        self.off_topic_guard = OffTopicGuardrail()
+        self.confidence_guard = RetrievalConfidenceGuardrail()
+        self.grounding_guard = GroundingGuardrail()
+        self.output_guard = OutputValidationGuardrail()
 
-        self.safety_guard = (
-            InputSafetyGuardrail()
-        )
-
-        self.off_topic_guard = (
-            OffTopicGuardrail()
-        )
-
-        self.confidence_guard = (
-            RetrievalConfidenceGuardrail()
-        )
-
-        self.grounding_guard = (
-            GroundingGuardrail()
-        )
-
-        self.output_guard = (
-            OutputValidationGuardrail()
-        )
-
-        # --------------------------------------------------
         # LLM
-        # --------------------------------------------------
+        self.llm_provider = get_llm_provider()
 
-        self.llm_provider = (
-            get_llm_provider()
+        logger.info(
+            f"LLM provider initialized: "
+            f"{self.llm_provider.__class__.__name__}"
         )
 
     async def execute_voice_pipeline(
@@ -114,9 +93,7 @@ class PipelineHarness:
         audio_filename: str = "recording.webm"
     ) -> VoiceRAGResponse:
 
-        request_id = str(
-            uuid.uuid4()
-        )[:8]
+        request_id = str(uuid.uuid4())[:8]
 
         timings = StageTimings()
 
@@ -140,12 +117,10 @@ class PipelineHarness:
                     f"size={len(audio_bytes)} bytes"
                 )
 
-                transcript = (
-                    await self.stt_service.transcribe_audio(
-                        audio_bytes=audio_bytes,
-                        filename=audio_filename,
-                        language_code="unknown"
-                    )
+                transcript = await self.stt_service.transcribe_audio(
+                    audio_bytes=audio_bytes,
+                    filename=audio_filename,
+                    language_code="unknown"
                 )
 
             elif query_text:
@@ -159,8 +134,7 @@ class PipelineHarness:
         timings.stt_ms = timer.elapsed_ms
 
         logger.info(
-            f"[{request_id}] Transcript: "
-            f"{transcript}"
+            f"[{request_id}] Transcript: {transcript}"
         )
 
         # ==================================================
@@ -169,12 +143,12 @@ class PipelineHarness:
 
         with timer.measure():
 
-            cleaned_query = clean_text(
-                transcript
-            )
+            cleaned_query = clean_text(transcript)
 
-        timings.preprocessing_ms = (
-            timer.elapsed_ms
+        timings.preprocessing_ms = timer.elapsed_ms
+
+        logger.info(
+            f"[{request_id}] Cleaned query: {cleaned_query}"
         )
 
         # ==================================================
@@ -192,8 +166,8 @@ class PipelineHarness:
             return VoiceRAGResponse(
                 transcript="",
                 answer=(
-                    "I could not understand the "
-                    "spoken question. Please try again."
+                    "I could not understand the spoken question. "
+                    "Please try again."
                 ),
                 grounded=False,
                 refused=True,
@@ -209,10 +183,8 @@ class PipelineHarness:
         # 4. INPUT SAFETY GUARDRAIL
         # ==================================================
 
-        safety_res = (
-            self.safety_guard.validate(
-                cleaned_query
-            )
+        safety_res = self.safety_guard.validate(
+            cleaned_query
         )
 
         if not safety_res.passed:
@@ -244,10 +216,8 @@ class PipelineHarness:
         # 5. OFF TOPIC GUARDRAIL
         # ==================================================
 
-        off_topic_res = (
-            self.off_topic_guard.validate(
-                cleaned_query
-            )
+        off_topic_res = self.off_topic_guard.validate(
+            cleaned_query
         )
 
         if not off_topic_res.passed:
@@ -287,6 +257,13 @@ class PipelineHarness:
             cleaned_query
         )
 
+        logger.info(
+            f"[{request_id}] "
+            f"Category={query_cat}, "
+            f"Strategy={chunk_strat}, "
+            f"Alpha={alpha}"
+        )
+
         # ==================================================
         # 7. HYBRID RETRIEVAL
         # ==================================================
@@ -297,9 +274,7 @@ class PipelineHarness:
 
         with timer.measure():
 
-            search_start = (
-                time.perf_counter()
-            )
+            search_start = time.perf_counter()
 
             hybrid_candidates = (
                 self.hybrid_retriever.retrieve(
@@ -309,9 +284,7 @@ class PipelineHarness:
                 )
             )
 
-            search_end = (
-                time.perf_counter()
-            )
+            search_end = time.perf_counter()
 
             search_duration = (
                 search_end - search_start
@@ -329,6 +302,11 @@ class PipelineHarness:
                 search_duration * 0.30
             )
 
+        logger.info(
+            f"[{request_id}] "
+            f"Retrieved {len(hybrid_candidates)} candidates"
+        )
+
         # ==================================================
         # 8. RERANKING
         # ==================================================
@@ -339,16 +317,12 @@ class PipelineHarness:
 
         with timer.measure():
 
-            final_contexts = (
-                self.reranker.rerank(
-                    hybrid_candidates,
-                    final_k=3
-                )
+            final_contexts = self.reranker.rerank(
+                hybrid_candidates,
+                final_k=3
             )
 
-        timings.reranking_ms = (
-            timer.elapsed_ms
-        )
+        timings.reranking_ms = timer.elapsed_ms
 
         # ==================================================
         # 9. RETRIEVAL CONFIDENCE
@@ -368,25 +342,27 @@ class PipelineHarness:
             default=0.0
         )
 
-        # --------------------------------------------------
-        # DEBUG: RETRIEVAL SCORES
-        # --------------------------------------------------
-
         logger.info(
             f"[{request_id}] RETRIEVAL SCORES: "
             f"{[round(c.score, 4) for c in final_contexts]}"
         )
 
         logger.info(
-            f"[{request_id}] Top retrieval confidence: "
+            f"[{request_id}] "
+            f"Top retrieval confidence: "
             f"{top_confidence:.4f}"
         )
 
-        # --------------------------------------------------
+        # ==================================================
         # CONFIDENCE GUARD
-        # --------------------------------------------------
+        # ==================================================
 
         if not confidence_res.passed:
+
+            logger.warning(
+                f"[{request_id}] "
+                f"Retrieval confidence guard rejected query."
+            )
 
             total_end = time.perf_counter()
 
@@ -414,10 +390,29 @@ class PipelineHarness:
         # 10. FINAL RELEVANCE CHECK
         # ==================================================
 
+        # IMPORTANT:
+        # Your previous code had an indentation error here.
+        #
+        # We use 0.15 because your current hybrid retriever
+        # produces normalized/fused scores.
+        #
+        # Example:
+        # 0.60 -> strong
+        # 0.30 -> reasonable
+        # 0.15 -> minimum
+        # below 0.15 -> weak
+
         FINAL_RELEVANCE_THRESHOLD = 0.15
 
+        logger.info(
+            f"[{request_id}] "
+            f"Final relevance threshold: "
+            f"{FINAL_RELEVANCE_THRESHOLD:.4f}"
+        )
 
-            logger.info(
+        if top_confidence < FINAL_RELEVANCE_THRESHOLD:
+
+            logger.warning(
                 f"[{request_id}] Query rejected: "
                 f"confidence {top_confidence:.4f} < "
                 f"threshold {FINAL_RELEVANCE_THRESHOLD:.4f}"
@@ -449,19 +444,26 @@ class PipelineHarness:
         # 11. LLM GENERATION
         # ==================================================
 
+        logger.info(
+            f"[{request_id}] "
+            f"Sending query to "
+            f"{self.llm_provider.__class__.__name__}"
+        )
+
         raw_answer = ""
 
         with timer.measure():
 
-            raw_answer = (
-                await self.llm_provider.generate(
-                    cleaned_query,
-                    final_contexts
-                )
+            raw_answer = await self.llm_provider.generate(
+                cleaned_query,
+                final_contexts
             )
 
-        timings.generation_ms = (
-            timer.elapsed_ms
+        timings.generation_ms = timer.elapsed_ms
+
+        logger.info(
+            f"[{request_id}] "
+            f"LLM answer: {raw_answer}"
         )
 
         # ==================================================
@@ -479,13 +481,13 @@ class PipelineHarness:
                 )
             )
 
-            grounded = (
-                grounding_res.passed
-            )
+            grounded = grounding_res.passed
 
-        timings.grounding_ms = (
-            timer.elapsed_ms
-        )
+        timings.grounding_ms = timer.elapsed_ms
+
+        # ==================================================
+        # GROUNDING FAILURE
+        # ==================================================
 
         if not grounded:
 
@@ -500,18 +502,17 @@ class PipelineHarness:
         # 13. OUTPUT VALIDATION
         # ==================================================
 
-        out_res = (
-            self.output_guard.validate(
-                raw_answer
-            )
+        out_res = self.output_guard.validate(
+            raw_answer
         )
 
-        final_answer = (
-            raw_answer
-            if out_res.passed
-            else
-            "Not Found"
-        )
+        if out_res.passed:
+
+            final_answer = raw_answer
+
+        else:
+
+            final_answer = "Not Found"
 
         # ==================================================
         # TOTAL TIMING
@@ -547,6 +548,10 @@ class PipelineHarness:
             for c in final_contexts
         ]
 
+        # ==================================================
+        # FINAL LOGGING
+        # ==================================================
+
         logger.info(
             f"[{request_id}] "
             f"Pipeline completed in "
@@ -560,27 +565,17 @@ class PipelineHarness:
         # ==================================================
 
         return VoiceRAGResponse(
-
             transcript=cleaned_query,
-
             answer=final_answer,
-
             grounded=grounded,
-
             refused=False,
-
             confidence=round(
                 top_confidence,
                 3
             ),
-
             query_category=query_cat,
-
             chunk_strategy=chunk_strat,
-
             sources=sources_data,
-
             timings=timings.to_dict(),
-
             request_id=request_id
         )
