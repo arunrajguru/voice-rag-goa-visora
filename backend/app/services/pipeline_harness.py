@@ -367,7 +367,10 @@ class PipelineHarness:
             ],
             default=0.0
         )
-
+  logger.info(
+    f"[{request_id}] RETRIEVAL SCORES: "
+    f"{[round(c.score, 4) for c in final_contexts]}"
+  )
         if not confidence_res.passed:
 
             total_end = time.perf_counter()
