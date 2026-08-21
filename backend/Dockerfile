@@ -8,15 +8,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
+
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-# Create index data directory
-RUN mkdir -p backend/data/index
-
-EXPOSE 8000
+RUN mkdir -p /app/backend/data/index
 
 ENV PYTHONPATH=/app/backend
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Build English MSMARCO-XI index
+RUN python backend/scripts/build_index.py --split train --sample 1000
+
+EXPOSE 8000
+
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
