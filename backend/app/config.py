@@ -2,11 +2,15 @@ from pathlib import Path
 from pydantic_settings import BaseSettings
 
 
-# /app/backend
-BACKEND_DIR = Path(__file__).resolve().parent.parent
+# =====================================================
+# PROJECT PATHS
+# =====================================================
 
-# /app/backend/data/index
-INDEX_DIR = BACKEND_DIR / "data" / "index"
+# Docker WORKDIR = /app
+BASE_DIR = Path(__file__).resolve().parent.parent
+
+# /app/data/index
+INDEX_DIR = BASE_DIR / "data" / "index"
 
 
 class Settings(BaseSettings):
@@ -36,7 +40,9 @@ class Settings(BaseSettings):
     # RETRIEVAL
     # =====================================================
 
-    EMBEDDING_MODEL: str = ""
+    EMBEDDING_MODEL: str = (
+        "sentence-transformers/all-MiniLM-L6-v2"
+    )
 
     TOP_K: int = 10
 
