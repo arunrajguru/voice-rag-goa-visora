@@ -1,12 +1,12 @@
-import os
 from pathlib import Path
+from pydantic_settings import BaseSettings
 
-from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# /app/backend
+BACKEND_DIR = Path(__file__).resolve().parent.parent
 
-BASE_DIR = Path(__file__).resolve().parent.parent.parent
-
-INDEX_DIR = BASE_DIR / "data" / "index"
+# /app/backend/data/index
+INDEX_DIR = BACKEND_DIR / "data" / "index"
 
 
 class Settings(BaseSettings):
@@ -18,12 +18,10 @@ class Settings(BaseSettings):
 
     PORT: int = 8000
 
-    FRONTEND_URL: str = (
-        "https://voice-rag-goa-visora.vercel.app"
-    )
+    FRONTEND_URL: str = "http://localhost:5173"
 
     # =====================================================
-    # API KEYS
+    # API
     # =====================================================
 
     SARVAM_API_KEY: str = ""
@@ -32,16 +30,13 @@ class Settings(BaseSettings):
 
     LLM_API_KEY: str = ""
 
-    # Current Groq model
     LLM_MODEL: str = "llama-3.1-8b-instant"
 
     # =====================================================
     # RETRIEVAL
     # =====================================================
 
-    EMBEDDING_MODEL: str = (
-        "sentence-transformers/all-MiniLM-L6-v2"
-    )
+    EMBEDDING_MODEL: str = ""
 
     TOP_K: int = 10
 
@@ -55,7 +50,7 @@ class Settings(BaseSettings):
     # THRESHOLDS
     # =====================================================
 
-    SIMILARITY_THRESHOLD: float = 0.25
+    SIMILARITY_THRESHOLD: float = 0.15
 
     GROUNDING_THRESHOLD: float = 0.40
 
@@ -79,11 +74,9 @@ class Settings(BaseSettings):
         INDEX_DIR / "index_config.json"
     )
 
-    model_config = SettingsConfigDict(
-        env_file=".env",
-        env_file_encoding="utf-8",
-        extra="ignore",
-    )
+    class Config:
+        env_file = ".env"
+        env_file_encoding = "utf-8"
 
 
 settings = Settings()
