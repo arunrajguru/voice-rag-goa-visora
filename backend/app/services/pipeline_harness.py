@@ -414,7 +414,7 @@ class PipelineHarness:
         # 10. FINAL RELEVANCE CHECK
         # ==================================================
 
-        FINAL_RELEVANCE_THRESHOLD = 0.50
+        FINAL_RELEVANCE_THRESHOLD = 0.15
 
         if top_confidence < FINAL_RELEVANCE_THRESHOLD:
 
