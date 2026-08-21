@@ -5,7 +5,7 @@ from app.models.data_models import ChunkMetadata, GuardrailResult
 class RetrievalConfidenceGuardrail:
     """Checks whether retrieved chunks are relevant enough to answer the question."""
 
-    def __init__(self, threshold: float = 0.35):
+    def __init__(self, threshold: float = 0.05):
         self.threshold = threshold
 
     def validate(self, chunks: List[ChunkMetadata]) -> GuardrailResult:
