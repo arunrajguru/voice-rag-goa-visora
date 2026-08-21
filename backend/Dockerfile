@@ -13,12 +13,17 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-RUN mkdir -p /app/backend/data/index
-
 ENV PYTHONPATH=/app/backend
 
-# Build English MSMARCO-XI index
+RUN mkdir -p /app/backend/data/index
+
+# Build the English MSMARCO-XI index
 RUN python backend/scripts/build_index.py --split train --sample 1000
+
+# Verify that the build actually created the files
+RUN echo "===== INDEX FILES =====" && \
+    ls -lh /app/backend/data/index && \
+    echo "======================="
 
 EXPOSE 8000
 
