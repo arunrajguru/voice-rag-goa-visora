@@ -416,7 +416,6 @@ class PipelineHarness:
 
         FINAL_RELEVANCE_THRESHOLD = 0.15
 
-        if top_confidence < FINAL_RELEVANCE_THRESHOLD:
 
             logger.info(
                 f"[{request_id}] Query rejected: "
