@@ -14,71 +14,96 @@ from app.retrieval.hybrid import HybridRetriever
 
 from app.services.pipeline_harness import PipelineHarness
 
-from app.models.data_models import ChunkMetadata
 from app.utils.logger import logger
 
 
-def build_sample_fallback_index(
+def load_real_indexes(
     dense_retriever: DenseRetriever,
     bm25_retriever: BM25Retriever,
-):
+) -> bool:
     """
-    Creates a lightweight fallback knowledge base when
-    the real index files are unavailable.
+    Load the real MSMARCO-XI indexes.
     """
+
+    metadata_path = settings.METADATA_PATH
+    bm25_path = settings.BM25_PATH
+    dense_path = settings.INDEX_PATH
+
+    logger.info("Checking MSMARCO-XI index files...")
 
     logger.info(
-        "Index files not found. "
-        "Creating lightweight sample knowledge base..."
+        f"Metadata: {metadata_path} "
+        f"exists={os.path.exists(metadata_path)}"
     )
 
-    sample_docs = [
-        (
-            "doc_1",
-            "MSMARCO-XI is a multilingual search and passage "
-            "retrieval benchmark dataset developed for Indian "
-            "languages and English QA benchmarking.",
-        ),
-        (
-            "doc_2",
-            "Retrieval-Augmented Generation RAG combines "
-            "retrieval with language models to ground answers "
-            "using relevant source documents.",
-        ),
-        (
-            "doc_3",
-            "Sarvam AI provides speech-to-text models optimized "
-            "for Indian languages, accents and multilingual "
-            "voice recognition.",
-        ),
-        (
-            "doc_4",
-            "Adaptive chunking selects sentence-aware or semantic "
-            "chunking strategies depending on the type of query.",
-        ),
-        (
-            "doc_5",
-            "Grounding guardrails verify that generated answers "
-            "are supported by retrieved source context.",
-        ),
-    ]
+    logger.info(
+        f"BM25: {bm25_path} "
+        f"exists={os.path.exists(bm25_path)}"
+    )
 
-    chunks = []
+    logger.info(
+        f"Dense: {dense_path} "
+        f"exists={os.path.exists(dense_path)}"
+    )
 
-    for doc_id, text in sample_docs:
-        chunks.append(
-            ChunkMetadata(
-                document_id=doc_id,
-                chunk_id=f"{doc_id}_c0",
-                strategy="sentence",
-                position=0,
-                text=text,
-                source="MSMARCO-XI",
-            )
+    if not os.path.exists(metadata_path):
+        logger.warning("Metadata file not found.")
+        return False
+
+    if not os.path.exists(bm25_path):
+        logger.warning("BM25 index not found.")
+        return False
+
+    try:
+        with open(
+            metadata_path,
+            "r",
+            encoding="utf-8",
+        ) as file:
+            metadata = json.load(file)
+
+        if not metadata:
+            logger.warning("Metadata file is empty.")
+            return False
+
+        logger.info(
+            f"Loading {len(metadata)} chunks..."
         )
 
-    dense_retriever.build_index(chunks)
-    bm25_retriever.build_index(chunks)
+        dense_retriever.load_index(
+            dense_path,
+            metadata,
+        )
+
+        bm25_retriever.load_index(
+            bm25_path
+        )
+
+        logger.info(
+            "=============================================="
+        )
+
+        logger.info(
+            "REAL MSMARCO-XI INDEX LOADED SUCCESSFULLY"
+        )
+
+        logger.info(
+            f"Chunks loaded: {len(metadata)}"
+        )
+
+        logger.info(
+            "=============================================="
+        )
+
+        return True
+
+    except Exception as error:
+
+        logger.exception(
+            f"Failed to load indexes: {error}"
+        )
+
+        return False
 
 
 @asynccontextmanager
@@ -88,90 +113,67 @@ async def lifespan(app: FastAPI):
         "Initializing Voice RAG Backend Services..."
     )
 
-    # ---------------------------------------------------------
-    # Dense Retriever
-    # ---------------------------------------------------------
+    # =====================================================
+    # DENSE RETRIEVER
+    # =====================================================
 
     dense_retriever = DenseRetriever(
         settings.EMBEDDING_MODEL
     )
 
-    # ---------------------------------------------------------
-    # BM25 Retriever
-    # ---------------------------------------------------------
+    # =====================================================
+    # BM25 RETRIEVER
+    # =====================================================
 
     bm25_retriever = BM25Retriever()
 
-    # ---------------------------------------------------------
-    # Try loading existing indexes
-    # ---------------------------------------------------------
+    # =====================================================
+    # LOAD REAL INDEX
+    # =====================================================
 
-    indexes_loaded = False
+    indexes_loaded = load_real_indexes(
+        dense_retriever,
+        bm25_retriever,
+    )
 
-    try:
-
-        metadata_exists = os.path.exists(
-            settings.METADATA_PATH
-        )
-
-        bm25_exists = os.path.exists(
-            settings.BM25_PATH
-        )
-
-        if metadata_exists and bm25_exists:
-
-            logger.info(
-                "Loading metadata and BM25 index..."
-            )
-
-            with open(
-                settings.METADATA_PATH,
-                "r",
-                encoding="utf-8",
-            ) as file:
-
-                metadata = json.load(file)
-
-            dense_retriever.load_index(
-                settings.INDEX_PATH,
-                metadata,
-            )
-
-            bm25_retriever.load_index(
-                settings.BM25_PATH
-            )
-
-            logger.info(
-                f"Successfully loaded "
-                f"{len(metadata)} document chunks."
-            )
-
-            indexes_loaded = True
-
-    except Exception as error:
-
-        logger.warning(
-            f"Could not load existing indexes: {error}"
-        )
-
-    # ---------------------------------------------------------
-    # Fallback index
-    # ---------------------------------------------------------
+    # =====================================================
+    # FALLBACK
+    # =====================================================
+    #
+    # IMPORTANT:
+    # We do NOT silently create fake knowledge.
+    #
+    # If the real index is missing, fail clearly.
+    # This prevents the application from pretending
+    # to answer using MSMARCO-XI.
+    # =====================================================
 
     if not indexes_loaded:
 
-        logger.info(
-            "Using lightweight fallback knowledge base."
+        logger.error(
+            "================================================"
         )
 
-        build_sample_fallback_index(
-            dense_retriever,
-            bm25_retriever,
+        logger.error(
+            "MSMARCO-XI INDEXES ARE NOT AVAILABLE."
         )
 
-    # ---------------------------------------------------------
-    # Hybrid Retriever
-    # ---------------------------------------------------------
+        logger.error(
+            "Run build_index.py before starting the backend."
+        )
+
+        logger.error(
+            "================================================"
+        )
+
+        raise RuntimeError(
+            "MSMARCO-XI indexes are missing. "
+            "Run the indexing step before starting FastAPI."
+        )
+
+    # =====================================================
+    # HYBRID RETRIEVER
+    # =====================================================
 
     hybrid_retriever = HybridRetriever(
         dense_retriever,
@@ -179,9 +181,9 @@ async def lifespan(app: FastAPI):
         alpha=settings.DENSE_WEIGHT,
     )
 
-    # ---------------------------------------------------------
-    # Pipeline Harness
-    # ---------------------------------------------------------
+    # =====================================================
+    # PIPELINE
+    # =====================================================
 
     app.state.pipeline_harness = PipelineHarness(
         hybrid_retriever
@@ -212,15 +214,6 @@ app = FastAPI(
 # =========================================================
 # CORS
 # =========================================================
-#
-# Frontend:
-# https://voice-rag-goa-visora.vercel.app
-#
-# Previous Vercel deployment:
-# https://voice-rag-goa-visora-gozuvv1pk-visora4.vercel.app
-#
-# We explicitly allow both origins.
-# =========================================================
 
 app.add_middleware(
     CORSMiddleware,
@@ -230,8 +223,6 @@ app.add_middleware(
         "https://voice-rag-goa-visora-gozuvv1pk-visora4.vercel.app",
     ],
 
-    # We are not using cookies/authentication
-    # between the Vercel frontend and Render backend.
     allow_credentials=False,
 
     allow_methods=[
@@ -243,9 +234,7 @@ app.add_middleware(
         "PATCH",
     ],
 
-    allow_headers=[
-        "*"
-    ],
+    allow_headers=["*"],
 )
 
 
@@ -257,7 +246,7 @@ app.include_router(router)
 
 
 # =========================================================
-# LOCAL / RENDER STARTUP
+# STARTUP
 # =========================================================
 
 if __name__ == "__main__":
@@ -270,7 +259,7 @@ if __name__ == "__main__":
             getattr(
                 settings,
                 "PORT",
-                10000
+                10000,
             ),
         )
     )
