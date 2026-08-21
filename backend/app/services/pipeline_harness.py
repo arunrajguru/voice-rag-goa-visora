@@ -178,7 +178,7 @@ class PipelineHarness:
         )
 
         # ==================================================
-        # VALIDATE TRANSCRIPT
+        # 3. VALIDATE TRANSCRIPT
         # ==================================================
 
         if not cleaned_query:
@@ -206,7 +206,7 @@ class PipelineHarness:
             )
 
         # ==================================================
-        # 3. INPUT SAFETY GUARDRAIL
+        # 4. INPUT SAFETY GUARDRAIL
         # ==================================================
 
         safety_res = (
@@ -241,7 +241,7 @@ class PipelineHarness:
             )
 
         # ==================================================
-        # 4. OFF TOPIC GUARDRAIL
+        # 5. OFF TOPIC GUARDRAIL
         # ==================================================
 
         off_topic_res = (
@@ -276,7 +276,7 @@ class PipelineHarness:
             )
 
         # ==================================================
-        # 5. QUERY CLASSIFICATION
+        # 6. QUERY CLASSIFICATION
         # ==================================================
 
         (
@@ -288,7 +288,7 @@ class PipelineHarness:
         )
 
         # ==================================================
-        # 6. HYBRID RETRIEVAL
+        # 7. HYBRID RETRIEVAL
         # ==================================================
 
         hybrid_candidates: List[
@@ -330,7 +330,7 @@ class PipelineHarness:
             )
 
         # ==================================================
-        # 7. RERANKING
+        # 8. RERANKING
         # ==================================================
 
         final_contexts: List[
@@ -351,7 +351,7 @@ class PipelineHarness:
         )
 
         # ==================================================
-        # 8. RETRIEVAL CONFIDENCE
+        # 9. RETRIEVAL CONFIDENCE
         # ==================================================
 
         confidence_res = (
@@ -367,10 +367,25 @@ class PipelineHarness:
             ],
             default=0.0
         )
-  logger.info(
-    f"[{request_id}] RETRIEVAL SCORES: "
-    f"{[round(c.score, 4) for c in final_contexts]}"
-  )
+
+        # --------------------------------------------------
+        # DEBUG: RETRIEVAL SCORES
+        # --------------------------------------------------
+
+        logger.info(
+            f"[{request_id}] RETRIEVAL SCORES: "
+            f"{[round(c.score, 4) for c in final_contexts]}"
+        )
+
+        logger.info(
+            f"[{request_id}] Top retrieval confidence: "
+            f"{top_confidence:.4f}"
+        )
+
+        # --------------------------------------------------
+        # CONFIDENCE GUARD
+        # --------------------------------------------------
+
         if not confidence_res.passed:
 
             total_end = time.perf_counter()
@@ -396,30 +411,17 @@ class PipelineHarness:
             )
 
         # ==================================================
-        # 9. FINAL RELEVANCE CHECK
+        # 10. FINAL RELEVANCE CHECK
         # ==================================================
-        #
-        # Even if the first confidence guard passes,
-        # require a stronger score before allowing the
-        # LLM to generate an answer.
-        #
-        # This prevents unrelated questions from receiving
-        # an answer based on weakly related dataset chunks.
-        #
 
         FINAL_RELEVANCE_THRESHOLD = 0.50
-
-        logger.info(
-            f"[{request_id}] Top retrieval confidence: "
-            f"{top_confidence:.3f}"
-        )
 
         if top_confidence < FINAL_RELEVANCE_THRESHOLD:
 
             logger.info(
                 f"[{request_id}] Query rejected: "
-                f"confidence {top_confidence:.3f} < "
-                f"threshold {FINAL_RELEVANCE_THRESHOLD:.3f}"
+                f"confidence {top_confidence:.4f} < "
+                f"threshold {FINAL_RELEVANCE_THRESHOLD:.4f}"
             )
 
             total_end = time.perf_counter()
@@ -445,7 +447,7 @@ class PipelineHarness:
             )
 
         # ==================================================
-        # 10. LLM GENERATION
+        # 11. LLM GENERATION
         # ==================================================
 
         raw_answer = ""
@@ -464,7 +466,7 @@ class PipelineHarness:
         )
 
         # ==================================================
-        # 11. GROUNDING VERIFICATION
+        # 12. GROUNDING VERIFICATION
         # ==================================================
 
         grounded = False
@@ -496,7 +498,7 @@ class PipelineHarness:
             raw_answer = "Not Found"
 
         # ==================================================
-        # 12. OUTPUT VALIDATION
+        # 13. OUTPUT VALIDATION
         # ==================================================
 
         out_res = (
