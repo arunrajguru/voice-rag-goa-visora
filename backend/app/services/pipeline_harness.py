@@ -178,7 +178,7 @@ class PipelineHarness:
         )
 
         # ==================================================
-        # Validate transcript
+        # VALIDATE TRANSCRIPT
         # ==================================================
 
         if not cleaned_query:
@@ -317,7 +317,6 @@ class PipelineHarness:
                 search_end - search_start
             ) * 1000.0
 
-            # Keep existing timing structure.
             timings.embedding_ms = (
                 search_duration * 0.40
             )
@@ -379,38 +378,71 @@ class PipelineHarness:
 
             return VoiceRAGResponse(
                 transcript=cleaned_query,
-                answer=(
-                    confidence_res.refusal_message
-                    or
-                    "Insufficient context similarity "
-                    "to produce a reliable answer."
-                ),
+                answer="Not Found",
                 grounded=False,
                 refused=True,
                 confidence=round(
                     top_confidence,
-                    2
+                    3
                 ),
                 query_category=query_cat,
                 chunk_strategy=chunk_strat,
-                sources=[
-                    {
-                        "chunk_id": c.chunk_id,
-                        "document_id": c.document_id,
-                        "score": round(
-                            c.score,
-                            2
-                        ),
-                        "strategy": c.strategy
-                    }
-                    for c in final_contexts
-                ],
+                sources=[],
                 timings=timings.to_dict(),
                 request_id=request_id
             )
 
         # ==================================================
-        # 9. LLM GENERATION
+        # 9. FINAL RELEVANCE CHECK
+        # ==================================================
+        #
+        # Even if the first confidence guard passes,
+        # require a stronger score before allowing the
+        # LLM to generate an answer.
+        #
+        # This prevents unrelated questions from receiving
+        # an answer based on weakly related dataset chunks.
+        #
+
+        FINAL_RELEVANCE_THRESHOLD = 0.50
+
+        logger.info(
+            f"[{request_id}] Top retrieval confidence: "
+            f"{top_confidence:.3f}"
+        )
+
+        if top_confidence < FINAL_RELEVANCE_THRESHOLD:
+
+            logger.info(
+                f"[{request_id}] Query rejected: "
+                f"confidence {top_confidence:.3f} < "
+                f"threshold {FINAL_RELEVANCE_THRESHOLD:.3f}"
+            )
+
+            total_end = time.perf_counter()
+
+            timings.total_ms = (
+                total_end - total_start
+            ) * 1000.0
+
+            return VoiceRAGResponse(
+                transcript=cleaned_query,
+                answer="Not Found",
+                grounded=False,
+                refused=True,
+                confidence=round(
+                    top_confidence,
+                    3
+                ),
+                query_category=query_cat,
+                chunk_strategy=chunk_strat,
+                sources=[],
+                timings=timings.to_dict(),
+                request_id=request_id
+            )
+
+        # ==================================================
+        # 10. LLM GENERATION
         # ==================================================
 
         raw_answer = ""
@@ -429,7 +461,7 @@ class PipelineHarness:
         )
 
         # ==================================================
-        # 10. GROUNDING VERIFICATION
+        # 11. GROUNDING VERIFICATION
         # ==================================================
 
         grounded = False
@@ -458,14 +490,10 @@ class PipelineHarness:
                 "Initial answer was ungrounded."
             )
 
-            raw_answer = (
-                "I could not verify that the "
-                "generated answer is grounded "
-                "in the retrieved context documents."
-            )
+            raw_answer = "Not Found"
 
         # ==================================================
-        # 11. OUTPUT VALIDATION
+        # 12. OUTPUT VALIDATION
         # ==================================================
 
         out_res = (
@@ -478,7 +506,7 @@ class PipelineHarness:
             raw_answer
             if out_res.passed
             else
-            "An error occurred formatting output."
+            "Not Found"
         )
 
         # ==================================================
