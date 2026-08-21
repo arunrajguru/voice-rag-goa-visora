@@ -1,28 +1,42 @@
 """
-Offline Indexing Pipeline for Voice RAG System
+MSMARCO-XI Offline Index Builder
+HH Goa 2026 - Voice RAG
 
-Downloads ai4bharat/MSMARCO-XI, extracts query/passage content,
-creates chunks, and builds the Dense + BM25 indexes.
+Downloads ai4bharat/MSMARCO-XI from Hugging Face,
+extracts passages, creates chunks, and builds
+lightweight Dense + BM25 indexes.
+
+Designed to run on Render.
 """
 
-import os
 import sys
 import json
 import time
 import argparse
-
 from pathlib import Path
 from typing import List, Dict, Any
 
 from datasets import load_dataset
 
-# Add backend directory to Python path
+
+# ==========================================================
+# PATH SETUP
+# ==========================================================
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
 sys.path.insert(
     0,
-    str(Path(__file__).resolve().parent.parent)
+    str(PROJECT_ROOT)
 )
 
+
+# ==========================================================
+# APPLICATION IMPORTS
+# ==========================================================
+
 from app.config import settings
+
 from app.models.data_models import ChunkMetadata
 
 from app.chunking.fixed import FixedChunker
@@ -35,16 +49,21 @@ from app.retrieval.sparse import BM25Retriever
 from app.utils.logger import logger
 
 
+# ==========================================================
+# DATASET
+# ==========================================================
+
 DATASET_NAME = "ai4bharat/MSMARCO-XI"
 
 
 # ==========================================================
-# DATASET EXTRACTION
+# TEXT EXTRACTION
 # ==========================================================
 
 def extract_text(value: Any) -> str:
     """
-    Convert different MSMARCO-XI field formats into plain text.
+    Recursively extract text from strings,
+    lists and dictionaries.
     """
 
     if value is None:
@@ -68,13 +87,17 @@ def extract_text(value: Any) -> str:
 
     if isinstance(value, dict):
 
-        # Common passage field names
-        for key in [
+        # Common passage keys
+        preferred_keys = [
             "passage_text",
             "text",
             "passage",
-            "content"
-        ]:
+            "content",
+            "title",
+            "answer",
+        ]
+
+        for key in preferred_keys:
 
             if key in value:
 
@@ -85,7 +108,7 @@ def extract_text(value: Any) -> str:
                 if text:
                     return text
 
-        # Fallback: extract all values
+        # Fallback
         parts = []
 
         for item in value.values():
@@ -100,18 +123,30 @@ def extract_text(value: Any) -> str:
     return str(value).strip()
 
 
+# ==========================================================
+# EXTRACT DATASET DOCUMENTS
+# ==========================================================
+
 def extract_documents(
     split: str,
     limit: int
 ) -> List[Dict[str, str]]:
 
+    logger.info("=" * 60)
+
     logger.info(
-        f"Loading {DATASET_NAME}"
+        f"Loading dataset: {DATASET_NAME}"
     )
 
     logger.info(
-        f"Split={split}, limit={limit}"
+        f"Split: {split}"
     )
+
+    logger.info(
+        f"Limit: {limit}"
+    )
+
+    logger.info("=" * 60)
 
     dataset = load_dataset(
         DATASET_NAME,
@@ -119,7 +154,11 @@ def extract_documents(
     )
 
     logger.info(
-        f"Dataset loaded: {len(dataset)} records"
+        f"Dataset loaded successfully."
+    )
+
+    logger.info(
+        f"Total records available: {len(dataset)}"
     )
 
     documents = []
@@ -137,12 +176,8 @@ def extract_documents(
             record.get("query")
         )
 
-        passages = record.get(
-            "passages"
-        )
-
-        passage_text = extract_text(
-            passages
+        passages = extract_text(
+            record.get("passages")
         )
 
         answers = extract_text(
@@ -150,27 +185,32 @@ def extract_documents(
         )
 
         # --------------------------------------------------
-        # Build searchable text
+        # Build searchable document
         # --------------------------------------------------
 
         parts = []
 
         if query:
+
             parts.append(
                 f"Question: {query}"
             )
 
-        if passage_text:
+        if passages:
+
             parts.append(
-                f"Passage: {passage_text}"
+                f"Passage: {passages}"
             )
 
         if answers:
+
             parts.append(
                 f"Answer: {answers}"
             )
 
-        text = "\n".join(parts).strip()
+        text = "\n".join(
+            parts
+        ).strip()
 
         if not text:
             continue
@@ -180,17 +220,28 @@ def extract_documents(
         )
 
         if not query_id:
+
             query_id = str(index)
 
         documents.append(
             {
-                "document_id": f"msmarco_xi_{query_id}",
+                "document_id":
+                    f"msmarco_xi_{query_id}",
+
                 "text": text
             }
         )
 
+        # Progress logging
+        if (index + 1) % 500 == 0:
+
+            logger.info(
+                f"Processed "
+                f"{index + 1}/{max_records} records"
+            )
+
     logger.info(
-        f"Extracted {len(documents)} searchable documents"
+        f"Extracted {len(documents)} documents."
     )
 
     return documents
@@ -208,49 +259,56 @@ def build_index(
     start_time = time.time()
 
     logger.info("=" * 60)
+
     logger.info(
-        "STARTING MSMARCO-XI INDEXING"
+        "STARTING MSMARCO-XI INDEX BUILD"
     )
+
     logger.info("=" * 60)
 
-    # ------------------------------------------------------
-    # Output directory
-    # ------------------------------------------------------
+    # ======================================================
+    # CREATE INDEX DIRECTORY
+    # ======================================================
 
-    out_dir = Path(
+    index_dir = Path(
         settings.INDEX_PATH
     ).parent
 
-    out_dir.mkdir(
+    index_dir.mkdir(
         parents=True,
         exist_ok=True
     )
 
-    # ------------------------------------------------------
-    # 1. Load actual dataset
-    # ------------------------------------------------------
-
     logger.info(
-        "STEP 1: Loading MSMARCO-XI..."
+        f"Index directory: {index_dir}"
     )
 
-    docs = extract_documents(
+    # ======================================================
+    # STEP 1 — DATASET
+    # ======================================================
+
+    logger.info(
+        "STEP 1/5: Loading MSMARCO-XI..."
+    )
+
+    documents = extract_documents(
         split=split,
         limit=sample_limit
     )
 
-    if not docs:
+    if not documents:
 
         raise RuntimeError(
-            "No documents were extracted from MSMARCO-XI."
+            "No documents were extracted "
+            "from MSMARCO-XI."
         )
 
-    # ------------------------------------------------------
-    # 2. Chunking
-    # ------------------------------------------------------
+    # ======================================================
+    # STEP 2 — CHUNKING
+    # ======================================================
 
     logger.info(
-        "STEP 2: Creating chunks..."
+        "STEP 2/5: Creating chunks..."
     )
 
     fixed_chunker = FixedChunker(
@@ -272,83 +330,122 @@ def build_index(
 
     seen_texts = set()
 
-    for doc in docs:
+    for index, document in enumerate(
+        documents
+    ):
 
-        doc_id = doc["document_id"]
-        text = doc["text"]
+        document_id = document[
+            "document_id"
+        ]
+
+        text = document[
+            "text"
+        ]
 
         chunks = []
 
-        # Fixed
+        # --------------------------------------------------
+        # Fixed chunks
+        # --------------------------------------------------
+
         try:
+
             chunks.extend(
                 fixed_chunker.chunk_text(
-                    doc_id,
+                    document_id,
                     text
                 )
             )
-        except Exception as e:
+
+        except Exception as error:
 
             logger.warning(
                 f"Fixed chunking failed "
-                f"for {doc_id}: {e}"
+                f"for {document_id}: "
+                f"{error}"
             )
 
-        # Sentence
+        # --------------------------------------------------
+        # Sentence chunks
+        # --------------------------------------------------
+
         try:
+
             chunks.extend(
                 sentence_chunker.chunk_text(
-                    doc_id,
+                    document_id,
                     text
                 )
             )
-        except Exception as e:
+
+        except Exception as error:
 
             logger.warning(
                 f"Sentence chunking failed "
-                f"for {doc_id}: {e}"
+                f"for {document_id}: "
+                f"{error}"
             )
 
-        # Semantic
+        # --------------------------------------------------
+        # Semantic chunks
+        # --------------------------------------------------
+
         try:
+
             chunks.extend(
                 semantic_chunker.chunk_text(
-                    doc_id,
+                    document_id,
                     text
                 )
             )
-        except Exception as e:
+
+        except Exception as error:
 
             logger.warning(
                 f"Semantic chunking failed "
-                f"for {doc_id}: {e}"
+                f"for {document_id}: "
+                f"{error}"
             )
 
+        # --------------------------------------------------
         # Deduplicate
+        # --------------------------------------------------
+
         for chunk in chunks:
 
-            clean_text = (
+            normalized = (
                 " ".join(
-                    chunk.text.lower().split()
+                    chunk.text
+                    .lower()
+                    .split()
                 )
             )
 
-            if not clean_text:
+            if not normalized:
                 continue
 
-            if clean_text in seen_texts:
+            if normalized in seen_texts:
                 continue
 
             seen_texts.add(
-                clean_text
+                normalized
             )
 
             all_chunks.append(
                 chunk
             )
 
+        if (index + 1) % 500 == 0:
+
+            logger.info(
+                f"Chunked "
+                f"{index + 1}/{len(documents)} "
+                f"documents"
+            )
+
     logger.info(
-        f"Generated {len(all_chunks)} unique chunks"
+        f"Total unique chunks: "
+        f"{len(all_chunks)}"
     )
 
     if not all_chunks:
@@ -357,12 +454,12 @@ def build_index(
             "No chunks were generated."
         )
 
-    # ------------------------------------------------------
-    # 3. Dense index
-    # ------------------------------------------------------
+    # ======================================================
+    # STEP 3 — DENSE INDEX
+    # ======================================================
 
     logger.info(
-        "STEP 3: Building dense index..."
+        "STEP 3/5: Building dense index..."
     )
 
     dense_retriever = DenseRetriever(
@@ -378,16 +475,16 @@ def build_index(
     )
 
     logger.info(
-        f"Dense index saved to "
+        f"Dense index saved: "
         f"{settings.INDEX_PATH}"
     )
 
-    # ------------------------------------------------------
-    # 4. BM25 index
-    # ------------------------------------------------------
+    # ======================================================
+    # STEP 4 — BM25
+    # ======================================================
 
     logger.info(
-        "STEP 4: Building BM25 index..."
+        "STEP 4/5: Building BM25 index..."
     )
 
     bm25_retriever = BM25Retriever()
@@ -401,16 +498,16 @@ def build_index(
     )
 
     logger.info(
-        f"BM25 index saved to "
+        f"BM25 index saved: "
         f"{settings.BM25_PATH}"
     )
 
-    # ------------------------------------------------------
-    # 5. Metadata
-    # ------------------------------------------------------
+    # ======================================================
+    # STEP 5 — METADATA
+    # ======================================================
 
     logger.info(
-        "STEP 5: Saving metadata..."
+        "STEP 5/5: Saving metadata..."
     )
 
     metadata = []
@@ -445,30 +542,42 @@ def build_index(
             ensure_ascii=False
         )
 
-    # ------------------------------------------------------
-    # 6. Statistics
-    # ------------------------------------------------------
+    # ======================================================
+    # CONFIGURATION
+    # ======================================================
 
-    config_stats = {
+    config = {
 
-        "dataset": DATASET_NAME,
+        "dataset":
+            DATASET_NAME,
 
-        "split": split,
+        "split":
+            split,
 
-        "total_documents": len(docs),
+        "records":
+            len(documents),
 
-        "total_chunks": len(
-            all_chunks
-        ),
+        "chunks":
+            len(all_chunks),
 
-        "strategies": [
-            "fixed",
-            "sentence",
-            "semantic"
-        ],
+        "chunking":
+            [
+                "fixed",
+                "sentence",
+                "semantic"
+            ],
 
         "embedding_model":
             settings.EMBEDDING_MODEL,
+
+        "dense_index":
+            settings.INDEX_PATH,
+
+        "bm25_index":
+            settings.BM25_PATH,
+
+        "metadata":
+            settings.METADATA_PATH,
 
         "built_at":
             time.strftime(
@@ -483,9 +592,35 @@ def build_index(
     ) as file:
 
         json.dump(
-            config_stats,
+            config,
             file,
             indent=2
+        )
+
+    # ======================================================
+    # FINAL VERIFICATION
+    # ======================================================
+
+    logger.info("=" * 60)
+
+    logger.info(
+        "VERIFYING INDEX FILES..."
+    )
+
+    files = [
+        settings.INDEX_PATH,
+        settings.BM25_PATH,
+        settings.METADATA_PATH,
+        settings.CONFIG_PATH,
+    ]
+
+    for file_path in files:
+
+        path = Path(file_path)
+
+        logger.info(
+            f"{path.name}: "
+            f"{'OK' if path.exists() else 'MISSING'}"
         )
 
     elapsed = (
@@ -496,11 +631,11 @@ def build_index(
     logger.info("=" * 60)
 
     logger.info(
-        "MSMARCO-XI INDEXING COMPLETE"
+        "MSMARCO-XI INDEX BUILD COMPLETE"
     )
 
     logger.info(
-        f"Documents: {len(docs)}"
+        f"Documents: {len(documents)}"
     )
 
     logger.info(
@@ -512,31 +647,35 @@ def build_index(
     )
 
     logger.info(
-        f"Output: {out_dir}"
+        f"Index directory: {index_dir}"
     )
 
     logger.info("=" * 60)
 
 
 # ==========================================================
-# MAIN
+# COMMAND LINE
 # ==========================================================
 
 if __name__ == "__main__":
 
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(
+        description=
+        "Build Voice RAG index from MSMARCO-XI"
+    )
 
     parser.add_argument(
         "--split",
         type=str,
-        default="train"
+        default="train",
+        help="Dataset split"
     )
 
     parser.add_argument(
         "--sample",
         type=int,
         default=5000,
-        help="Number of MSMARCO-XI records to index"
+        help="Number of records to index"
     )
 
     args = parser.parse_args()
