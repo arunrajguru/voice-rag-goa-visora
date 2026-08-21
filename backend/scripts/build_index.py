@@ -1,8 +1,8 @@
 """
 Offline Indexing Pipeline for Voice RAG System
 
-Constructs multi-strategy chunks, FAISS vector index, BM25 sparse index,
-and metadata configuration from MSMARCO-XI dataset records.
+Downloads ai4bharat/MSMARCO-XI, extracts query/passage content,
+creates chunks, and builds the Dense + BM25 indexes.
 """
 
 import os
@@ -10,118 +10,538 @@ import sys
 import json
 import time
 import argparse
+
 from pathlib import Path
 from typing import List, Dict, Any
 
-# Add parent directory to sys.path
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from datasets import load_dataset
+
+# Add backend directory to Python path
+sys.path.insert(
+    0,
+    str(Path(__file__).resolve().parent.parent)
+)
 
 from app.config import settings
 from app.models.data_models import ChunkMetadata
+
 from app.chunking.fixed import FixedChunker
 from app.chunking.sentence import SentenceChunker
 from app.chunking.semantic import SemanticChunker
+
 from app.retrieval.dense import DenseRetriever
 from app.retrieval.sparse import BM25Retriever
+
 from app.utils.logger import logger
 
-def generate_sample_passages(limit: int) -> List[Dict[str, str]]:
-    """Generates clean realistic benchmark passages from MSMARCO-XI domain topic specs."""
-    sample_corpus = [
-        ("ms_001", "MSMARCO-XI is a passage retrieval benchmark created by AI4Bharat containing query-passage pairs for English and Indian language IR systems."),
-        ("ms_002", "Retrieval-Augmented Generation (RAG) reduces hallucination by retrieving relevant context passages from a vector database before LLM text generation."),
-        ("ms_003", "Sarvam AI Saaras model provides state-of-the-art speech recognition with low latency, supporting Hindi, Tamil, Telugu, Kannada, and Indian accented English."),
-        ("ms_004", "FAISS is an open-source library developed by Meta AI for fast dense vector similarity search and clustering of high-dimensional embeddings."),
-        ("ms_005", "BM25 is a term-matching sparse lexical retrieval algorithm based on inverted indexes, Term Frequency (TF), and Inverse Document Frequency (IDF)."),
-        ("ms_006", "Semantic chunking breaks text at logical topic shift boundaries by measuring sentence embedding cosine distance across consecutive sentences."),
-        ("ms_007", "Sentence chunking merges full sentences without splitting mid-sentence, preserving grammatical structure and logical clarity."),
-        ("ms_008", "Hybrid retrieval normalizes and blends dense vector scores with sparse BM25 scores to combine semantic context understanding with exact term matching."),
-        ("ms_009", "Grounding verification checks that generated answers contain facts strictly supported by retrieved source context passages to prevent hallucination."),
-        ("ms_010", "Input safety guardrails prevent prompt injection, system prompt leaks, and unsafe queries before entering the RAG execution harness.")
-    ]
-    docs = []
-    for i in range(limit):
-        base_id, text = sample_corpus[i % len(sample_corpus)]
-        docs.append({"document_id": f"{base_id}_{i}", "text": text})
-    return docs
 
-def build_index(sample_limit: int = 500):
+DATASET_NAME = "ai4bharat/MSMARCO-XI"
+
+
+# ==========================================================
+# DATASET EXTRACTION
+# ==========================================================
+
+def extract_text(value: Any) -> str:
+    """
+    Convert different MSMARCO-XI field formats into plain text.
+    """
+
+    if value is None:
+        return ""
+
+    if isinstance(value, str):
+        return value.strip()
+
+    if isinstance(value, list):
+
+        parts = []
+
+        for item in value:
+
+            text = extract_text(item)
+
+            if text:
+                parts.append(text)
+
+        return " ".join(parts)
+
+    if isinstance(value, dict):
+
+        # Common passage field names
+        for key in [
+            "passage_text",
+            "text",
+            "passage",
+            "content"
+        ]:
+
+            if key in value:
+
+                text = extract_text(
+                    value[key]
+                )
+
+                if text:
+                    return text
+
+        # Fallback: extract all values
+        parts = []
+
+        for item in value.values():
+
+            text = extract_text(item)
+
+            if text:
+                parts.append(text)
+
+        return " ".join(parts)
+
+    return str(value).strip()
+
+
+def extract_documents(
+    split: str,
+    limit: int
+) -> List[Dict[str, str]]:
+
+    logger.info(
+        f"Loading {DATASET_NAME}"
+    )
+
+    logger.info(
+        f"Split={split}, limit={limit}"
+    )
+
+    dataset = load_dataset(
+        DATASET_NAME,
+        split=split
+    )
+
+    logger.info(
+        f"Dataset loaded: {len(dataset)} records"
+    )
+
+    documents = []
+
+    max_records = min(
+        limit,
+        len(dataset)
+    )
+
+    for index in range(max_records):
+
+        record = dataset[index]
+
+        query = extract_text(
+            record.get("query")
+        )
+
+        passages = record.get(
+            "passages"
+        )
+
+        passage_text = extract_text(
+            passages
+        )
+
+        answers = extract_text(
+            record.get("answers")
+        )
+
+        # --------------------------------------------------
+        # Build searchable text
+        # --------------------------------------------------
+
+        parts = []
+
+        if query:
+            parts.append(
+                f"Question: {query}"
+            )
+
+        if passage_text:
+            parts.append(
+                f"Passage: {passage_text}"
+            )
+
+        if answers:
+            parts.append(
+                f"Answer: {answers}"
+            )
+
+        text = "\n".join(parts).strip()
+
+        if not text:
+            continue
+
+        query_id = extract_text(
+            record.get("query_id")
+        )
+
+        if not query_id:
+            query_id = str(index)
+
+        documents.append(
+            {
+                "document_id": f"msmarco_xi_{query_id}",
+                "text": text
+            }
+        )
+
+    logger.info(
+        f"Extracted {len(documents)} searchable documents"
+    )
+
+    return documents
+
+
+# ==========================================================
+# BUILD INDEX
+# ==========================================================
+
+def build_index(
+    split: str = "train",
+    sample_limit: int = 5000
+):
+
     start_time = time.time()
+
     logger.info("=" * 60)
-    logger.info("STARTING OFFLINE INDEXING PIPELINE")
+    logger.info(
+        "STARTING MSMARCO-XI INDEXING"
+    )
     logger.info("=" * 60)
 
-    out_dir = Path(settings.INDEX_PATH).parent
-    out_dir.mkdir(parents=True, exist_ok=True)
+    # ------------------------------------------------------
+    # Output directory
+    # ------------------------------------------------------
 
-    # 1. Fetch/Extract Documents
-    logger.info(f"Step 1: Extracting documents (limit={sample_limit})...")
-    docs = generate_sample_passages(sample_limit)
-    logger.info(f"Loaded {len(docs)} documents.")
+    out_dir = Path(
+        settings.INDEX_PATH
+    ).parent
 
-    # 2. Multi-strategy Chunking
-    logger.info("Step 2: Applying multi-strategy chunking (fixed, sentence, semantic)...")
-    fixed_chunker = FixedChunker(chunk_size=40, overlap=10)
-    sent_chunker = SentenceChunker(target_words=30)
-    sem_chunker = SemanticChunker(similarity_threshold=0.5)
+    out_dir.mkdir(
+        parents=True,
+        exist_ok=True
+    )
 
-    all_chunks: List[ChunkMetadata] = []
+    # ------------------------------------------------------
+    # 1. Load actual dataset
+    # ------------------------------------------------------
+
+    logger.info(
+        "STEP 1: Loading MSMARCO-XI..."
+    )
+
+    docs = extract_documents(
+        split=split,
+        limit=sample_limit
+    )
+
+    if not docs:
+
+        raise RuntimeError(
+            "No documents were extracted from MSMARCO-XI."
+        )
+
+    # ------------------------------------------------------
+    # 2. Chunking
+    # ------------------------------------------------------
+
+    logger.info(
+        "STEP 2: Creating chunks..."
+    )
+
+    fixed_chunker = FixedChunker(
+        chunk_size=80,
+        overlap=20
+    )
+
+    sentence_chunker = SentenceChunker(
+        target_words=50
+    )
+
+    semantic_chunker = SemanticChunker(
+        similarity_threshold=0.5
+    )
+
+    all_chunks: List[
+        ChunkMetadata
+    ] = []
+
     seen_texts = set()
 
     for doc in docs:
+
         doc_id = doc["document_id"]
         text = doc["text"]
-        
-        c_fixed = fixed_chunker.chunk_text(doc_id, text)
-        c_sent = sent_chunker.chunk_text(doc_id, text)
-        c_sem = sem_chunker.chunk_text(doc_id, text)
 
-        for c in c_fixed + c_sent + c_sem:
-            if c.text not in seen_texts:
-                seen_texts.add(c.text)
-                all_chunks.append(c)
+        chunks = []
 
-    logger.info(f"Generated {len(all_chunks)} unique chunks after deduplication.")
+        # Fixed
+        try:
+            chunks.extend(
+                fixed_chunker.chunk_text(
+                    doc_id,
+                    text
+                )
+            )
+        except Exception as e:
 
-    # 3. Dense Indexing (FAISS)
-    logger.info("Step 3: Building FAISS in-memory dense vector index...")
-    dense_retriever = DenseRetriever(settings.EMBEDDING_MODEL)
-    dense_retriever.build_index(all_chunks)
-    dense_retriever.save_index(settings.INDEX_PATH)
-    logger.info(f"FAISS index saved to {settings.INDEX_PATH}")
+            logger.warning(
+                f"Fixed chunking failed "
+                f"for {doc_id}: {e}"
+            )
 
-    # 4. Sparse Indexing (BM25)
-    logger.info("Step 4: Building BM25 sparse index...")
+        # Sentence
+        try:
+            chunks.extend(
+                sentence_chunker.chunk_text(
+                    doc_id,
+                    text
+                )
+            )
+        except Exception as e:
+
+            logger.warning(
+                f"Sentence chunking failed "
+                f"for {doc_id}: {e}"
+            )
+
+        # Semantic
+        try:
+            chunks.extend(
+                semantic_chunker.chunk_text(
+                    doc_id,
+                    text
+                )
+            )
+        except Exception as e:
+
+            logger.warning(
+                f"Semantic chunking failed "
+                f"for {doc_id}: {e}"
+            )
+
+        # Deduplicate
+        for chunk in chunks:
+
+            clean_text = (
+                " ".join(
+                    chunk.text.lower().split()
+                )
+            )
+
+            if not clean_text:
+                continue
+
+            if clean_text in seen_texts:
+                continue
+
+            seen_texts.add(
+                clean_text
+            )
+
+            all_chunks.append(
+                chunk
+            )
+
+    logger.info(
+        f"Generated {len(all_chunks)} unique chunks"
+    )
+
+    if not all_chunks:
+
+        raise RuntimeError(
+            "No chunks were generated."
+        )
+
+    # ------------------------------------------------------
+    # 3. Dense index
+    # ------------------------------------------------------
+
+    logger.info(
+        "STEP 3: Building dense index..."
+    )
+
+    dense_retriever = DenseRetriever(
+        settings.EMBEDDING_MODEL
+    )
+
+    dense_retriever.build_index(
+        all_chunks
+    )
+
+    dense_retriever.save_index(
+        settings.INDEX_PATH
+    )
+
+    logger.info(
+        f"Dense index saved to "
+        f"{settings.INDEX_PATH}"
+    )
+
+    # ------------------------------------------------------
+    # 4. BM25 index
+    # ------------------------------------------------------
+
+    logger.info(
+        "STEP 4: Building BM25 index..."
+    )
+
     bm25_retriever = BM25Retriever()
-    bm25_retriever.build_index(all_chunks)
-    bm25_retriever.save_index(settings.BM25_PATH)
-    logger.info(f"BM25 index saved to {settings.BM25_PATH}")
 
-    # 5. Metadata & Config Saving
-    logger.info("Step 5: Exporting metadata and index statistics...")
-    meta_json = [c.__dict__ for c in all_chunks]
-    with open(settings.METADATA_PATH, "w", encoding="utf-8") as f:
-        json.dump(meta_json, f, indent=2)
+    bm25_retriever.build_index(
+        all_chunks
+    )
+
+    bm25_retriever.save_index(
+        settings.BM25_PATH
+    )
+
+    logger.info(
+        f"BM25 index saved to "
+        f"{settings.BM25_PATH}"
+    )
+
+    # ------------------------------------------------------
+    # 5. Metadata
+    # ------------------------------------------------------
+
+    logger.info(
+        "STEP 5: Saving metadata..."
+    )
+
+    metadata = []
+
+    for chunk in all_chunks:
+
+        if hasattr(
+            chunk,
+            "model_dump"
+        ):
+
+            metadata.append(
+                chunk.model_dump()
+            )
+
+        else:
+
+            metadata.append(
+                chunk.dict()
+            )
+
+    with open(
+        settings.METADATA_PATH,
+        "w",
+        encoding="utf-8"
+    ) as file:
+
+        json.dump(
+            metadata,
+            file,
+            indent=2,
+            ensure_ascii=False
+        )
+
+    # ------------------------------------------------------
+    # 6. Statistics
+    # ------------------------------------------------------
 
     config_stats = {
-        "dataset": "ai4bharat/MSMARCO-XI",
-        "total_documents": len(docs),
-        "total_chunks": len(all_chunks),
-        "strategies": ["fixed", "sentence", "semantic"],
-        "embedding_model": settings.EMBEDDING_MODEL,
-        "built_at": time.strftime("%Y-%m-%d %H:%M:%S")
-    }
-    with open(settings.CONFIG_PATH, "w", encoding="utf-8") as f:
-        json.dump(config_stats, f, indent=2)
 
-    elapsed = time.time() - start_time
+        "dataset": DATASET_NAME,
+
+        "split": split,
+
+        "total_documents": len(docs),
+
+        "total_chunks": len(
+            all_chunks
+        ),
+
+        "strategies": [
+            "fixed",
+            "sentence",
+            "semantic"
+        ],
+
+        "embedding_model":
+            settings.EMBEDDING_MODEL,
+
+        "built_at":
+            time.strftime(
+                "%Y-%m-%d %H:%M:%S"
+            )
+    }
+
+    with open(
+        settings.CONFIG_PATH,
+        "w",
+        encoding="utf-8"
+    ) as file:
+
+        json.dump(
+            config_stats,
+            file,
+            indent=2
+        )
+
+    elapsed = (
+        time.time()
+        - start_time
+    )
+
     logger.info("=" * 60)
-    logger.info(f"INDEXING COMPLETE in {elapsed:.2f} seconds!")
-    logger.info(f"Output files in: {out_dir}")
+
+    logger.info(
+        "MSMARCO-XI INDEXING COMPLETE"
+    )
+
+    logger.info(
+        f"Documents: {len(docs)}"
+    )
+
+    logger.info(
+        f"Chunks: {len(all_chunks)}"
+    )
+
+    logger.info(
+        f"Time: {elapsed:.2f} seconds"
+    )
+
+    logger.info(
+        f"Output: {out_dir}"
+    )
+
     logger.info("=" * 60)
+
+
+# ==========================================================
+# MAIN
+# ==========================================================
 
 if __name__ == "__main__":
+
     parser = argparse.ArgumentParser()
-    parser.add_argument("--sample", type=int, default=500, help="Number of sample passages to index")
+
+    parser.add_argument(
+        "--split",
+        type=str,
+        default="train"
+    )
+
+    parser.add_argument(
+        "--sample",
+        type=int,
+        default=5000,
+        help="Number of MSMARCO-XI records to index"
+    )
+
     args = parser.parse_args()
-    build_index(args.sample)
+
+    build_index(
+        split=args.split,
+        sample_limit=args.sample
+    )
